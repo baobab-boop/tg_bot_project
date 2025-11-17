@@ -432,6 +432,21 @@ TEXTS = {
         'ru': "⚠️ Вы просматриваете вакансии в режиме студента. Для возврата в панель работодателя нажмите 'Режим работодателя'",
         'en': "⚠️ You are browsing jobs in student mode. To return to employer panel, press 'Employer mode'",
         'kk': "⚠️ Сіз студент режимінде вакансияларды көрудесіз. Жұмыс беруші панеліне оралу үшін 'Жұмыс беруші режимі' батырмасын басыңыз"
+    },
+    'student_applications': {
+        'ru': "📄 Ваши заявки:",
+        'en': "📄 Your applications:",
+        'kk': "📄 Сіздің өтініштеріңіз:"
+    },
+    'student_profile': {
+        'ru': "👤 Ваш профиль:",
+        'en': "👤 Your profile:",
+        'kk': "👤 Сіздің профиліңіз:"
+    },
+    'edit_profile': {
+        'ru': "✏️ Редактировать профиль",
+        'en': "✏️ Edit profile",
+        'kk': "✏️ Профильді өңдеу"
     }
 }
 
@@ -1070,6 +1085,9 @@ async def callback_browse_jobs(update: Update, context: ContextTypes.DEFAULT_TYP
         button_text = f"{title} - {company}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"view_job:{job_id}")])
 
+    # Add back button
+    keyboard.append([InlineKeyboardButton(get_text('back', language), callback_data="back_to_main")])
+
     await safe_send_message(
         context.bot,
         chat_id=chat_id,
@@ -1290,6 +1308,139 @@ async def notify_employer_about_application(context: ContextTypes.DEFAULT_TYPE, 
         await safe_send_message(context.bot, chat_id=employer_user_id, text=text)
 
 
+# ------------------ Student Applications and Profile Handlers ------------------
+async def callback_my_applications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show student's applications"""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    chat_id = get_chat_id(query)
+    language = get_user_language(user_id)
+
+    # Get student ID
+    student = db_execute(
+        "SELECT id FROM students WHERE user_id = ?", (user_id,), fetch=True
+    )
+
+    if not student:
+        text = "Сначала заполните профиль студента."
+        await safe_send_message(context.bot, chat_id=chat_id, text=text)
+        return
+
+    student_id = student[0][0]
+
+    # Get applications
+    applications = db_execute(
+        """SELECT a.id, j.title, e.company_name, a.status, a.applied_at
+           FROM applications a
+           JOIN jobs j ON a.job_id = j.id
+           JOIN employers e ON j.employer_id = e.id
+           WHERE a.student_id = ?
+           ORDER BY a.applied_at DESC""",
+        (student_id,), fetch=True
+    )
+
+    if not applications:
+        text = get_text('no_applications', language)
+        keyboard = [[InlineKeyboardButton(get_text('back', language), callback_data="back_to_main")]]
+        await safe_send_message(
+            context.bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    text = get_text('student_applications', language) + "\n\n"
+
+    for app_id, job_title, company, status, applied_at in applications:
+        status_text = get_text(f'status_{status}', language)
+        applied_date = datetime.fromisoformat(applied_at).strftime("%d.%m.%Y %H:%M")
+        text += f"📄 *{job_title}*\n"
+        text += f"🏢 {company}\n"
+        text += f"📊 {status_text}\n"
+        text += f"📅 {applied_date}\n\n"
+
+    keyboard = [[InlineKeyboardButton(get_text('back', language), callback_data="back_to_main")]]
+
+    await safe_send_message(
+        context.bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
+async def callback_student_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show student profile"""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    chat_id = get_chat_id(query)
+    language = get_user_language(user_id)
+
+    # Get student data
+    student = db_execute(
+        "SELECT fullname, phone, course, major, about FROM students WHERE user_id = ?",
+        (user_id,), fetch=True
+    )
+
+    if not student:
+        text = "Сначала заполните профиль студента."
+        keyboard = [[InlineKeyboardButton("📝 Заполнить профиль", callback_data="start_student_registration")]]
+        await safe_send_message(
+            context.bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    fullname, phone, course, major, about = student[0]
+
+    text = get_text('student_profile', language) + "\n\n"
+    text += f"👤 {get_text('name', language)}: {fullname}\n"
+    text += f"📞 {get_text('phone', language)}: {phone}\n"
+    text += f"🎓 {get_text('course', language)}: {course}\n"
+    text += f"📚 {get_text('major', language)}: {major}\n"
+    if about:
+        text += f"📝 {get_text('about_student', language)}: {about}\n"
+
+    keyboard = [
+        [InlineKeyboardButton(get_text('edit_profile', language), callback_data="edit_student_profile")],
+        [InlineKeyboardButton(get_text('back', language), callback_data="back_to_main")]
+    ]
+
+    await safe_send_message(
+        context.bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def callback_edit_student_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start student profile editing"""
+    query = update.callback_query
+    await query.answer()
+
+    chat_id = get_chat_id(query)
+    language = get_user_language(chat_id)
+
+    text = "Редактирование профиля временно недоступно. Для изменения данных обратитесь к администратору."
+    keyboard = [[InlineKeyboardButton(get_text('back', language), callback_data="student_profile")]]
+
+    await safe_send_message(
+        context.bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 # Application management (employer side)
 async def callback_view_applications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show applications to employer"""
@@ -1318,7 +1469,13 @@ async def callback_view_applications(update: Update, context: ContextTypes.DEFAU
 
     if not applications:
         text = get_text('no_applications', language)
-        await safe_send_message(context.bot, chat_id=chat_id, text=text)
+        keyboard = [[InlineKeyboardButton(get_text('back', language), callback_data="back_to_main")]]
+        await safe_send_message(
+            context.bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
     keyboard = []
@@ -1326,6 +1483,9 @@ async def callback_view_applications(update: Update, context: ContextTypes.DEFAU
         status_text = get_text(f'status_{status}', language)
         button_text = f"{fullname} - {job_title} ({status_text})"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"review_application:{app_id}")])
+
+    # Add back button
+    keyboard.append([InlineKeyboardButton(get_text('back', language), callback_data="back_to_main")])
 
     text = get_text('your_applications', language)
     await safe_send_message(
@@ -1488,7 +1648,13 @@ async def callback_my_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not jobs:
         text = get_text('no_jobs', language)
-        await safe_send_message(context.bot, chat_id=chat_id, text=text)
+        keyboard = [[InlineKeyboardButton(get_text('back', language), callback_data="back_to_main")]]
+        await safe_send_message(
+            context.bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
     # Создаем более информативное сообщение с кнопками для каждой вакансии
@@ -1507,10 +1673,7 @@ async def callback_my_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )])
 
     # Добавляем кнопку "Назад"
-    keyboard.append([InlineKeyboardButton(
-        get_text('back', language),
-        callback_data="back_to_main"
-    )])
+    keyboard.append([InlineKeyboardButton(get_text('back', language), callback_data="back_to_main")])
 
     await safe_send_message(
         context.bot,
@@ -2074,6 +2237,11 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_review_application, pattern=r"^review_application:"))
     app.add_handler(CallbackQueryHandler(callback_accept_application, pattern=r"^accept_application:"))
     app.add_handler(CallbackQueryHandler(callback_reject_application, pattern=r"^reject_application:"))
+
+    # Student handlers
+    app.add_handler(CallbackQueryHandler(callback_my_applications, pattern=r"^my_applications$"))
+    app.add_handler(CallbackQueryHandler(callback_student_profile, pattern=r"^student_profile$"))
+    app.add_handler(CallbackQueryHandler(callback_edit_student_profile, pattern=r"^edit_student_profile$"))
 
     # My Jobs handlers (employer)
     app.add_handler(CallbackQueryHandler(callback_my_jobs, pattern=r"^my_jobs$"))
